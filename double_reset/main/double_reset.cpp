@@ -12,6 +12,7 @@ static const char *TAG = "MyTask";
 
 TaskHandle_t mainTaskHandle;
 nvs_handle_t nvsHandle;
+TickType_t tickCount;
 
 // Fonction de la tâche
 void task(void *pvParameters)
@@ -36,16 +37,16 @@ TaskHandle_t jobHandle;
 void mainJob(void *pvParameters)
 {
     // Tâche en cours d'exécution
-    printf("mainJob started\n");
+    ESP_LOGI(TAG,"mainJob STARTED\n");
 
-    for(int i=0; i<9; i++)
+    for(int i=0; i<20; i++)
     {
         ESP_LOGI(TAG,">%d",i);
         // Simuler un travail
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     // Fin de la tâche
-    printf("Job ended.\n");
+    ESP_LOGI(TAG,"Job ended.\n");
 
     // Send notification to waiting task
     xTaskNotifyGive(mainTaskHandle);
@@ -66,11 +67,8 @@ void mainJob(void *pvParameters)
 // nvs_write_string(nvsHandle,"reset_state","OFF");
 
 // //2023-07-13 00:22:20 - read
-// string state = nvs_read_string(nvsHandle,"reset_state"); 
+// string state = nvs_read_string(nvsHandle,"reset_state","DEFAULT_VALUE"); 
 // cout<<"Read from func : "<<state<<endl;
-
-
-
 
 //2023-07-12 23:24:59 - Write to NVS
 void nvs_write_string(nvs_handle_t h,string key, string write_string)
@@ -80,22 +78,43 @@ void nvs_write_string(nvs_handle_t h,string key, string write_string)
 }
 
 //2023-07-12 23:24:51 - Read From NVS
-string nvs_read_string(nvs_handle_t h, string key)
+string nvs_read_string(nvs_handle_t h, string key, string defaultValue="")
 {
    size_t required_size = 0;
    nvs_get_str(h,key.c_str(), NULL, &required_size);
-   cout<<"size to read : "<< required_size<<endl;
-   printf("req size = %d\n", required_size);
-   if( required_size<=0) return "";
+//    cout<<"size to read : "<< required_size<<endl;
+//    printf("req size = %d\n", required_size);
+   if( required_size<=0) return defaultValue; //IN Case could not read
    char *buff = (char*) malloc(required_size);
    nvs_get_str(h, key.c_str(), buff, &required_size);
    return buff;
 }
 
-  
+//Your configuration program (Simulation
+TaskHandle_t configTaskHandle;
+void configTask(void *pvParameters)
+{
+    cout<<"ENTER CONFIG MODE HERE"<<endl;
+    vTaskDelay(pdMS_TO_TICKS(55100) );
+    cout<<"exit config mode here"<<endl;
+    // Send notification to waiting task
+    xTaskNotifyGive(mainTaskHandle);
+    //delete task
+    vTaskDelete(NULL);  
+}
 
-
-
+//2023-07-14 09:21:29 - Wait a bit then lock state in NVS
+const int WAIT_LOCK_MS = 10100; //10 secs
+void waitAndLockTask(void *pvParameters)
+{
+    ESP_LOGI(TAG,"Inside waitAndLockTask() %d sec \n",WAIT_LOCK_MS);
+    vTaskDelay( WAIT_LOCK_MS / portTICK_PERIOD_MS);
+    ESP_LOGI(TAG,"Exit waitAndLockTask() %d \n",WAIT_LOCK_MS);
+    //2023-07-14 09:17:57 - now lock !
+    nvs_write_string(nvsHandle,"reset_state","JOB");
+    //delete task
+    vTaskDelete(NULL);  
+}
 
 
 extern "C" void app_main(void)
@@ -108,34 +127,38 @@ extern "C" void app_main(void)
 nvs_flash_init();
 nvs_open("storage", NVS_READWRITE, &nvsHandle);
 
-//2023-07-13 00:22:14 - Write
-nvs_write_string(nvsHandle,"reset_state","OFF");
 
-//2023-07-13 00:22:20 - read
-string state = nvs_read_string(nvsHandle,"reset_state"); 
-cout<<"Read from func : "<<state<<endl;
+//RunTask to Wait then Write Lock
+xTaskCreate(waitAndLockTask, "waitAndLockTask", 2048, NULL, 5, NULL);
+
+//2023-07-14 09:12:15 - read reset_state
+string resetStateAtStart = nvs_read_string(nvsHandle,"reset_state","JOB");
+
+cout<<xTaskGetTickCount()<<" => resetStateAtStart : "<<resetStateAtStart<<endl;
+
+//2023-07-14 09:17:57 - write unlocked for now (config mode for a while)
+nvs_write_string(nvsHandle,"reset_state","CONFIG");
+
+if( resetStateAtStart == "CONFIG")
+{
+    //2023-07-14 09:25:09 - enter config mode (task)
+    xTaskCreate(configTask, "configTask", 2048, NULL, 5, &configTaskHandle);
+    nvs_write_string(nvsHandle,"reset_state","JOB"); //Set to locked state (run job state)
+    //BlinkBlue //config mode
+    cout<<"Wait till manual restart or config end!!!"<<endl;
+    xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+    cout<<"Done Waiting config, let's exit"<<endl;
+}else// resetStateAtStart is "LOCKED" (JOB)
+{
+    //Start main job (Blocking)
+    xTaskCreate(mainJob, "mainJob", 2048, NULL, 5, &jobHandle);
+    cout<<"Wait main job to end !!!"<<endl;
+    xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+    cout<<"Job ended, let's finish..."<<endl;
+}
 
 
 
 
-
-
-      // Créer la tâche
-//     xTaskCreate(task, "myTask", 2048, NULL, 5, NULL);
-//     xTaskCreate(mainJob, "mainJob", 2048, NULL, 5, &jobHandle);
-
-
-
-
-
-
-
-
-
-
-//     // Attendre la fin de la tâche
-//    puts("Wait for job task to finish\n");
-//    xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
-//     //vTaskDelete(NULL);    
-//     puts("End main!\n");
+ puts("End main !!!\n");
 }
